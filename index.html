@@ -419,6 +419,33 @@
                 }
             }
             
+            // Функция получения урона игроком
+            function takeDamage(damage) {
+                if (player.isDead || player.invulnerableTime > 0) return;
+                
+                // Сначала урон по броне
+                if (player.armor > 0) {
+                    const armorDamage = Math.min(player.armor, damage);
+                    player.armor -= armorDamage;
+                    damage -= armorDamage;
+                }
+                
+                // Урон по здоровью
+                player.health = Math.max(0, player.health - damage);
+                
+                // Отправляем урон на сервер
+                sendToServer({
+                    type: 'takeDamage',
+                    damage: damage
+                });
+                
+                // Создаем частицы крови
+                createParticles(player.x, player.y, '#ff0000', 5);
+                
+                // Неуязвимость после урона
+                player.invulnerableTime = 30;
+            }
+            
             // Управление
             const keys = {};
             
@@ -434,6 +461,146 @@
                           (navigator.msMaxTouchPoints > 0);
             }
             checkMobile();
+            
+            // Мультиплеер
+            let socket = null;
+            let playerId = null;
+            let otherPlayers = new Map();
+            let networkBullets = [];
+            let networkCars = [];
+            let isConnected = false;
+            
+            // Подключение к серверу
+            function connectToServer() {
+                try {
+                    const wsUrl = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                    socket = new WebSocket(wsUrl + location.host);
+                    
+                    socket.onopen = () => {
+                        console.log('Подключение к серверу установлено');
+                        isConnected = true;
+                    };
+                    
+                    socket.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        handleServerMessage(message);
+                    };
+                    
+                    socket.onclose = () => {
+                        console.log('Подключение к серверу закрыто');
+                        isConnected = false;
+                        // Переподключение через 3 секунды
+                        setTimeout(connectToServer, 3000);
+                    };
+                    
+                    socket.onerror = (error) => {
+                        console.error('Ошибка WebSocket:', error);
+                    };
+                } catch (error) {
+                    console.error('Ошибка подключения:', error);
+                    setTimeout(connectToServer, 3000);
+                }
+            }
+            
+            function handleServerMessage(message) {
+                switch (message.type) {
+                    case 'init':
+                        playerId = message.playerId;
+                        // Обновляем позицию игрока из сервера
+                        player.x = message.player.x;
+                        player.y = message.player.y;
+                        // Загружаем других игроков
+                        message.players.forEach(p => {
+                            if (p.id !== playerId) {
+                                otherPlayers.set(p.id, p);
+                            }
+                        });
+                        // Загружаем машины
+                        networkCars = message.cars || [];
+                        break;
+                        
+                    case 'playerJoined':
+                        if (message.player.id !== playerId) {
+                            otherPlayers.set(message.player.id, message.player);
+                        }
+                        break;
+                        
+                    case 'playerLeft':
+                        otherPlayers.delete(message.playerId);
+                        break;
+                        
+                    case 'playerMove':
+                        if (message.playerId !== playerId) {
+                            const otherPlayer = otherPlayers.get(message.playerId);
+                            if (otherPlayer) {
+                                otherPlayer.x = message.x;
+                                otherPlayer.y = message.y;
+                                otherPlayer.angle = message.angle;
+                            }
+                        }
+                        break;
+                        
+                    case 'bulletFired':
+                        networkBullets.push(message.bullet);
+                        break;
+                        
+                    case 'bulletsUpdate':
+                        networkBullets = message.bullets;
+                        break;
+                        
+                    case 'bulletHit':
+                        if (message.targetId === playerId) {
+                            takeDamage(message.damage);
+                        }
+                        break;
+                        
+                    case 'playerRespawn':
+                        if (message.playerId === playerId) {
+                            player.x = message.x;
+                            player.y = message.y;
+                            player.health = message.health;
+                        } else {
+                            const otherPlayer = otherPlayers.get(message.playerId);
+                            if (otherPlayer) {
+                                otherPlayer.x = message.x;
+                                otherPlayer.y = message.y;
+                                otherPlayer.health = message.health;
+                            }
+                        }
+                        break;
+                        
+                    case 'playerEnteredCar':
+                        const otherPlayer = otherPlayers.get(message.playerId);
+                        if (otherPlayer) {
+                            otherPlayer.inCar = true;
+                            otherPlayer.carId = message.carId;
+                        }
+                        break;
+                        
+                    case 'playerExitedCar':
+                        const player2 = otherPlayers.get(message.playerId);
+                        if (player2) {
+                            player2.inCar = false;
+                            player2.carId = null;
+                        }
+                        break;
+                        
+                    case 'carMove':
+                        const car = networkCars.find(c => c.id === message.carId);
+                        if (car) {
+                            car.x = message.x;
+                            car.y = message.y;
+                            car.angle = message.angle;
+                        }
+                        break;
+                }
+            }
+            
+            function sendToServer(message) {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify(message));
+                }
+            }
             
             // Игровые объекты
             const cars = [];
@@ -1627,6 +1794,14 @@
                     // Границы
                     player.x = Math.max(10, Math.min(game.mapWidth - 10, player.x));
                     player.y = Math.max(10, Math.min(game.mapHeight - 10, player.y));
+                    
+                    // Отправляем позицию на сервер
+                    sendToServer({
+                        type: 'move',
+                        x: player.x,
+                        y: player.y,
+                        angle: player.angle
+                    });
                 }
                 
                 // Проверка столкновений игрока с машинами (наезд)
@@ -1907,8 +2082,40 @@
                     }
                 }
                 
+                // Другие игроки (мультиплеер)
+                otherPlayers.forEach((otherPlayer, playerId) => {
+                    if (!otherPlayer.inCar && !otherPlayer.isDead) {
+                        const otherPlayerPerson = new Person(otherPlayer.x, otherPlayer.y, '#00ff00');
+                        otherPlayerPerson.angle = otherPlayer.angle || 0;
+                        otherPlayerPerson.health = otherPlayer.health || 100;
+                        otherPlayerPerson.maxHealth = otherPlayer.maxHealth || 100;
+                        otherPlayerPerson.armor = otherPlayer.armor || 0;
+                        otherPlayerPerson.drawPerson(false);
+                        
+                        // Имя игрока над головой
+                        ctx.save();
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = '12px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`Player ${playerId.substring(0, 6)}`, 
+                                   otherPlayer.x - game.camera.x, 
+                                   otherPlayer.y - game.camera.y - 25);
+                        ctx.restore();
+                    }
+                });
+                
                 // Пули
                 bullets.forEach(bullet => bullet.draw());
+                
+                // Сетевые пули (мультиплеер)
+                networkBullets.forEach(bullet => {
+                    ctx.save();
+                    ctx.fillStyle = bullet.color || '#ffff00';
+                    ctx.beginPath();
+                    ctx.arc(bullet.x - game.camera.x, bullet.y - game.camera.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                });
                 
                 // Прицел (только когда не в машине)
                 if (!player.inCar && !player.isDead) {
@@ -2168,6 +2375,15 @@
                             weapon.color
                         ));
                     }
+                    
+                    // Отправляем выстрел на сервер
+                    sendToServer({
+                        type: 'shoot',
+                        x: player.x + Math.cos(angle) * 15,
+                        y: player.y + Math.sin(angle) * 15,
+                        angle: angle,
+                        damage: weapon.damage
+                    });
                     
                     // Расход патронов
                     if (player.weapons[player.currentWeapon].ammo !== Infinity) {
@@ -2454,6 +2670,9 @@
             
             // Загружаем сохраненные данные игрока
             loadPlayerData();
+            
+            // Подключаемся к серверу для мультиплеера
+            connectToServer();
             
             gameLoop();
         });

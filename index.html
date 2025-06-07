@@ -282,6 +282,8 @@
             // Обработка кнопки "Назад"
             tg.BackButton.onClick(() => {
                 if (confirm('Вы уверены, что хотите выйти из игры?')) {
+                    // Сохраняем перед выходом
+                    savePlayerData();
                     tg.close();
                 }
             });
@@ -355,6 +357,67 @@
                     rifle: { unlocked: false, ammo: 0 }
                 }
             };
+            
+            // Функции сохранения и загрузки профиля через Telegram Cloud Storage
+            function savePlayerData() {
+                if (tg && tg.CloudStorage) {
+                    const playerData = {
+                        x: player.x,
+                        y: player.y,
+                        health: player.health,
+                        armor: player.armor,
+                        money: player.money,
+                        wantedLevel: player.wantedLevel,
+                        currentWeapon: player.currentWeapon,
+                        weapons: player.weapons,
+                        timestamp: Date.now()
+                    };
+                    
+                    tg.CloudStorage.setItem('playerData', JSON.stringify(playerData), function(error) {
+                        if (error) {
+                            console.log('Ошибка сохранения:', error);
+                        } else {
+                            console.log('Профиль сохранен');
+                        }
+                    });
+                }
+            }
+            
+            function loadPlayerData() {
+                if (tg && tg.CloudStorage) {
+                    tg.CloudStorage.getItem('playerData', function(error, data) {
+                        if (error) {
+                            console.log('Ошибка загрузки:', error);
+                            return;
+                        }
+                        
+                        if (data) {
+                            try {
+                                const savedData = JSON.parse(data);
+                                
+                                // Загружаем сохраненные данные
+                                player.x = savedData.x || 1500;
+                                player.y = savedData.y || 1500;
+                                player.health = savedData.health || 100;
+                                player.armor = savedData.armor || 0;
+                                player.money = savedData.money || 0;
+                                player.wantedLevel = savedData.wantedLevel || 0;
+                                player.currentWeapon = savedData.currentWeapon || 'pistol';
+                                
+                                if (savedData.weapons) {
+                                    Object.assign(player.weapons, savedData.weapons);
+                                }
+                                
+                                console.log('Профиль загружен');
+                            } catch (e) {
+                                console.log('Ошибка парсинга данных:', e);
+                            }
+                        } else {
+                            console.log('Сохранения не найдены');
+                        }
+                    });
+                }
+            }
             
             // Управление
             const keys = {};
@@ -459,6 +522,8 @@
                                 player.weapons[this.value].unlocked = true;
                                 player.weapons[this.value].ammo += weapons[this.value].ammo;
                                 player.currentWeapon = this.value;
+                                // Сохраняем при получении нового оружия
+                                savePlayerData();
                             }
                             break;
                         case 'armor':
@@ -1469,6 +1534,9 @@
                         player.y = 1500;
                         player.wantedLevel = 0;
                         player.invulnerableTime = 120;
+                        
+                        // Сохраняем после респауна
+                        savePlayerData();
                     }
                     return;
                 }
@@ -1710,6 +1778,14 @@
                     player.weapons[player.currentWeapon].ammo === Infinity ? '∞' : player.weapons[player.currentWeapon].ammo;
                 
                 document.getElementById('location').textContent = getCurrentDistrict();
+                
+                // Автосохранение каждые 10 секунд (600 кадров при 60 FPS)
+                if (!window.saveCounter) window.saveCounter = 0;
+                window.saveCounter++;
+                if (window.saveCounter >= 600) {
+                    savePlayerData();
+                    window.saveCounter = 0;
+                }
             }
             
             // Отрисовка
@@ -2375,6 +2451,10 @@
             
             // Запуск игры
             init();
+            
+            // Загружаем сохраненные данные игрока
+            loadPlayerData();
+            
             gameLoop();
         });
     </script>

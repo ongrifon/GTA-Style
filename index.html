@@ -536,7 +536,10 @@
                         break;
                         
                     case 'bulletFired':
-                        networkBullets.push(message.bullet);
+                        // Не добавляем свои собственные пули (они уже есть локально)
+                        if (message.playerId !== playerId) {
+                            networkBullets.push(message.bullet);
+                        }
                         break;
                         
                     case 'bulletsUpdate':
@@ -1880,6 +1883,20 @@
                     }
                 }
                 
+                // Обновление сетевых пуль
+                for (let i = networkBullets.length - 1; i >= 0; i--) {
+                    const bullet = networkBullets[i];
+                    bullet.x += Math.cos(bullet.angle) * bullet.speed;
+                    bullet.y += Math.sin(bullet.angle) * bullet.speed;
+                    
+                    // Удаляем старые пули
+                    if (Date.now() - bullet.createdAt > 3000 ||
+                        bullet.x < 0 || bullet.x > game.mapWidth || 
+                        bullet.y < 0 || bullet.y > game.mapHeight) {
+                        networkBullets.splice(i, 1);
+                    }
+                }
+                
                 // Обновление частиц
                 for (let i = particles.length - 1; i >= 0; i--) {
                     particles[i].update();
@@ -2393,7 +2410,10 @@
                         x: player.x + Math.cos(angle) * 15,
                         y: player.y + Math.sin(angle) * 15,
                         angle: angle,
-                        damage: weapon.damage
+                        damage: weapon.damage,
+                        speed: weapon.bulletSpeed,
+                        weapon: player.currentWeapon,
+                        color: weapon.color
                     });
                     
                     // Расход патронов
@@ -2578,6 +2598,18 @@
                                     weapon.color
                                 ));
                             }
+                            
+                            // Отправляем выстрел на сервер
+                            sendToServer({
+                                type: 'shoot',
+                                x: player.x + Math.cos(angle) * 15,
+                                y: player.y + Math.sin(angle) * 15,
+                                angle: angle,
+                                damage: weapon.damage,
+                                speed: weapon.bulletSpeed,
+                                weapon: player.currentWeapon,
+                                color: weapon.color
+                            });
                             
                             // Расход патронов
                             if (player.weapons[player.currentWeapon].ammo !== Infinity) {

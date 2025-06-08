@@ -462,10 +462,6 @@
             let otherPlayers = new Map();
             let networkBullets = [];
             let networkCars = [];
-            let networkNPCs = [];
-            let networkGangMembers = [];
-            let networkPolicemen = [];
-            let networkPoliceCars = [];
             let isConnected = false;
             
             // Подключение к серверу
@@ -516,10 +512,6 @@
                         });
                         // Загружаем машины
                         networkCars = message.cars || [];
-                        networkNPCs = message.npcs || [];
-                        networkGangMembers = message.gangMembers || [];
-                        networkPolicemen = message.policemen || [];
-                        networkPoliceCars = message.policeCars || [];
                         break;
                         
                     case 'playerJoined':
@@ -544,10 +536,7 @@
                         break;
                         
                     case 'bulletFired':
-                        // Не добавляем свои собственные пули (они уже есть локально)
-                        if (message.playerId !== playerId) {
-                            networkBullets.push(message.bullet);
-                        }
+                        networkBullets.push(message.bullet);
                         break;
                         
                     case 'bulletsUpdate':
@@ -599,15 +588,6 @@
                             car.angle = message.angle;
                         }
                         break;
-                        
-                    case 'worldUpdate':
-                        // Обновляем состояние мира с сервера
-                        networkCars = message.cars || networkCars;
-                        networkNPCs = message.npcs || networkNPCs;
-                        networkGangMembers = message.gangMembers || networkGangMembers;
-                        networkPolicemen = message.policemen || networkPolicemen;
-                        networkPoliceCars = message.policeCars || networkPoliceCars;
-                        break;
                 }
             }
             
@@ -615,46 +595,6 @@
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify(message));
                 }
-            }
-            
-            // Функция отрисовки сетевых машин
-            function drawNetworkCar(car) {
-                ctx.save();
-                ctx.translate(car.x - game.camera.x, car.y - game.camera.y);
-                ctx.rotate(car.angle || 0);
-                
-                const width = 40;
-                const height = 20;
-                
-                // Тень
-                ctx.fillStyle = 'rgba(0,0,0,0.3)';
-                ctx.fillRect(-width/2 + 3, -height/2 + 3, width, height);
-                
-                // Тело машины
-                ctx.fillStyle = car.color || '#ff3333';
-                ctx.fillRect(-width/2, -height/2, width, height);
-                
-                // Окна
-                ctx.fillStyle = 'rgba(100,100,100,0.8)';
-                ctx.fillRect(-width/3, -height/3, width/1.5, height/1.5);
-                
-                // Фары
-                ctx.fillStyle = '#ffffaa';
-                ctx.fillRect(width/2 - 5, -height/3, 5, 5);
-                ctx.fillRect(width/2 - 5, height/3 - 5, 5, 5);
-                
-                // Мигалки для полицейских машин
-                if (car.type === 'police') {
-                    const lightOn = Math.sin(Date.now() * 0.01) > 0;
-                    if (lightOn) {
-                        ctx.fillStyle = '#ff0000';
-                        ctx.fillRect(-width/2 + 5, -height/2 - 5, 8, 5);
-                        ctx.fillStyle = '#0000ff';
-                        ctx.fillRect(width/2 - 13, -height/2 - 5, 8, 5);
-                    }
-                }
-                
-                ctx.restore();
             }
             
             // Игровые объекты
@@ -1657,7 +1597,46 @@
                     }
                 }
                 
-                // НЕ создаем локальные машины и NPC - они синхронизируются с сервера
+                // Создание машин
+                for (let i = 0; i < maxCars; i++) {
+                    const colors = ['#ff3333', '#33ff33', '#3333ff', '#ffff33', '#ff33ff', '#33ffff', '#ff6633', '#6633ff'];
+                    const car = new Car(
+                        Math.random() * game.mapWidth,
+                        Math.random() * game.mapHeight,
+                        colors[Math.floor(Math.random() * colors.length)]
+                    );
+                    cars.push(car);
+                }
+                
+                // Начальные полицейские машины
+                for (let i = 0; i < 2; i++) {
+                    policeCars.push(new PoliceCar(
+                        Math.random() * game.mapWidth,
+                        Math.random() * game.mapHeight
+                    ));
+                }
+                
+                // Создание пешеходов
+                for (let i = 0; i < maxPedestrians; i++) {
+                    pedestrians.push(new Pedestrian(
+                        Math.random() * game.mapWidth,
+                        Math.random() * game.mapHeight
+                    ));
+                }
+                
+                // Создание членов банд в их районах
+                for (let gangKey in gangs) {
+                    const gang = gangs[gangKey];
+                    const district = districts[gang.territory];
+                    
+                    for (let i = 0; i < 5; i++) {
+                        gangMembers.push(new GangMember(
+                            district.x + Math.random() * district.width,
+                            district.y + Math.random() * district.height,
+                            gangKey
+                        ));
+                    }
+                }
                 
                 // Начальные пикапы
                 for (let i = 0; i < 10; i++) {
@@ -1861,7 +1840,29 @@
                 mouseWorldX = mouseX + game.camera.x;
                 mouseWorldY = mouseY + game.camera.y;
                 
-                // НЕ обновляем локальные NPC и машины - они управляются сервером
+                // Обновление машин
+                cars.forEach(car => car.update());
+                policeCars.forEach(car => car.update());
+                
+                // Обновление полицейских
+                for (let i = policemen.length - 1; i >= 0; i--) {
+                    policemen[i].update();
+                    if (policemen[i].isDead) {
+                        if (!policemen[i].deathTimer) {
+                            policemen[i].deathTimer = 300;
+                        }
+                        policemen[i].deathTimer--;
+                        if (policemen[i].deathTimer <= 0) {
+                            policemen.splice(i, 1);
+                        }
+                    }
+                }
+                
+                // Обновление пешеходов
+                pedestrians.forEach(ped => ped.update());
+                
+                // Обновление членов банд
+                gangMembers.forEach(gang => gang.update());
                 
                 // Обновление пикапов
                 for (let i = pickups.length - 1; i >= 0; i--) {
@@ -1879,20 +1880,6 @@
                     }
                 }
                 
-                // Обновление сетевых пуль
-                for (let i = networkBullets.length - 1; i >= 0; i--) {
-                    const bullet = networkBullets[i];
-                    bullet.x += Math.cos(bullet.angle) * bullet.speed;
-                    bullet.y += Math.sin(bullet.angle) * bullet.speed;
-                    
-                    // Удаляем старые пули
-                    if (Date.now() - bullet.createdAt > 3000 ||
-                        bullet.x < 0 || bullet.x > game.mapWidth || 
-                        bullet.y < 0 || bullet.y > game.mapHeight) {
-                        networkBullets.splice(i, 1);
-                    }
-                }
-                
                 // Обновление частиц
                 for (let i = particles.length - 1; i >= 0; i--) {
                     particles[i].update();
@@ -1901,7 +1888,47 @@
                     }
                 }
                 
-                // НЕ делаем респавн NPC - это управляется сервером
+                // Респавн пешеходов
+                if (pedestrians.filter(p => !p.isDead).length < maxPedestrians && Math.random() < 0.02) {
+                    pedestrians.push(new Pedestrian(
+                        Math.random() * game.mapWidth,
+                        Math.random() * game.mapHeight
+                    ));
+                }
+                
+                // Респавн членов банд
+                if (gangMembers.filter(g => !g.isDead).length < maxGangMembers && Math.random() < 0.01) {
+                    const gangKeys = Object.keys(gangs);
+                    const randomGang = gangKeys[Math.floor(Math.random() * gangKeys.length)];
+                    const district = districts[gangs[randomGang].territory];
+                    
+                    gangMembers.push(new GangMember(
+                        district.x + Math.random() * district.width,
+                        district.y + Math.random() * district.height,
+                        randomGang
+                    ));
+                }
+                
+                // Очистка мертвых
+                if (Math.random() < 0.01) {
+                    for (let i = pedestrians.length - 1; i >= 0; i--) {
+                        if (pedestrians[i].isDead) {
+                            pedestrians.splice(i, 1);
+                        }
+                    }
+                    
+                    for (let i = gangMembers.length - 1; i >= 0; i--) {
+                        if (gangMembers[i].isDead) {
+                            if (!gangMembers[i].deathTimer) {
+                                gangMembers[i].deathTimer = 300;
+                            }
+                            gangMembers[i].deathTimer--;
+                            if (gangMembers[i].deathTimer <= 0) {
+                                gangMembers.splice(i, 1);
+                            }
+                        }
+                    }
+                }
                 
                 // Уменьшение розыска
                 if (Math.random() < 0.002 && player.wantedLevel > 0) {
@@ -2023,61 +2050,35 @@
                 // Частицы
                 particles.forEach(particle => particle.draw());
                 
-                // Сетевые пешеходы (NPC)
-                networkNPCs.forEach(npc => {
-                    if (Math.abs(npc.x - player.x) < 500 && Math.abs(npc.y - player.y) < 400) {
-                        const npcPerson = new Person(npc.x, npc.y, npc.color);
-                        npcPerson.angle = npc.angle || 0;
-                        npcPerson.health = npc.health || 100;
-                        npcPerson.isDead = npc.isDead || false;
-                        if (!npcPerson.isDead) npcPerson.drawPerson(false);
+                // Пешеходы
+                pedestrians.forEach(ped => {
+                    if (Math.abs(ped.x - player.x) < 500 && Math.abs(ped.y - player.y) < 400) {
+                        ped.draw();
                     }
                 });
                 
-                // Сетевые члены банд
-                networkGangMembers.forEach(gang => {
+                // Члены банд
+                gangMembers.forEach(gang => {
                     if (Math.abs(gang.x - player.x) < 600 && Math.abs(gang.y - player.y) < 500) {
-                        const gangPerson = new Person(gang.x, gang.y, gang.color);
-                        gangPerson.angle = gang.angle || 0;
-                        gangPerson.health = gang.health || 150;
-                        gangPerson.armor = gang.armor || 0;
-                        gangPerson.isDead = gang.isDead || false;
-                        if (!gangPerson.isDead) {
-                            gangPerson.drawPerson(false);
-                            
-                            // Название банды над головой
-                            ctx.fillStyle = gang.color;
-                            ctx.font = '10px Arial';
-                            ctx.textAlign = 'center';
-                            ctx.fillText(gang.gang || 'Gang', gang.x - game.camera.x, gang.y - game.camera.y - 25);
-                        }
+                        gang.draw();
                     }
                 });
                 
-                // Сетевые машины
-                networkCars.forEach(car => {
+                // Машины
+                cars.forEach(car => {
                     if (Math.abs(car.x - player.x) < 500 && Math.abs(car.y - player.y) < 400) {
-                        drawNetworkCar(car);
+                        car.draw();
                     }
                 });
                 
-                // Сетевые полицейские машины
-                networkPoliceCars.forEach(car => {
+                policeCars.forEach(car => {
                     if (Math.abs(car.x - player.x) < 600 && Math.abs(car.y - player.y) < 500) {
-                        drawNetworkCar(car);
+                        car.draw();
                     }
                 });
                 
-                // Сетевые полицейские
-                networkPolicemen.forEach(cop => {
-                    if (Math.abs(cop.x - player.x) < 500 && Math.abs(cop.y - player.y) < 400) {
-                        const copPerson = new Person(cop.x, cop.y, '#000033');
-                        copPerson.angle = cop.angle || 0;
-                        copPerson.health = cop.health || 100;
-                        copPerson.isDead = cop.isDead || false;
-                        if (!copPerson.isDead) copPerson.drawPerson(false);
-                    }
-                });
+                // Полицейские
+                policemen.forEach(cop => cop.draw());
                 
                 // Игрок
                 if (!player.inCar && !player.isDead) {
@@ -2392,10 +2393,7 @@
                         x: player.x + Math.cos(angle) * 15,
                         y: player.y + Math.sin(angle) * 15,
                         angle: angle,
-                        damage: weapon.damage,
-                        speed: weapon.bulletSpeed,
-                        weapon: player.currentWeapon,
-                        color: weapon.color
+                        damage: weapon.damage
                     });
                     
                     // Расход патронов
@@ -2580,18 +2578,6 @@
                                     weapon.color
                                 ));
                             }
-                            
-                            // Отправляем выстрел на сервер
-                            sendToServer({
-                                type: 'shoot',
-                                x: player.x + Math.cos(angle) * 15,
-                                y: player.y + Math.sin(angle) * 15,
-                                angle: angle,
-                                damage: weapon.damage,
-                                speed: weapon.bulletSpeed,
-                                weapon: player.currentWeapon,
-                                color: weapon.color
-                            });
                             
                             // Расход патронов
                             if (player.weapons[player.currentWeapon].ammo !== Infinity) {
